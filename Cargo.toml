@@ -6,4 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+modbus_device = { git = "https://github.com/lkzjdnb/modbus_device.git" }
+clap = { version = "4.5.9", features = ["derive"] }
+config = { version = "0.14.0", features = ["yaml", "toml"] }
+env_logger = "0.11.3"
 log = "0.4.22"
+serde = { version = "1.0.204", features = ["derive"] }

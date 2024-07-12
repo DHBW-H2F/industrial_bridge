@@ -1,0 +1,19 @@
+devices:
+  modbus:
+    electrolyzer:
+      remote: "127.0.0.1:4502"
+      input_registers: "input_registers.json"
+      holding_registers: "holding_registers.json"
+  S7:
+    compressor:
+      remote: 192.168.1.16:102
+      registers: S7_registers.json
+
+remotes:
+  influx_db:
+    local_influx:
+      remote: "http://localhost:8086"
+      bucket: "electrolyzer"
+  prometheus:
+    prometheus:
+      remote: "http://1.1.1.1:9091/metrics/job/job-name"
