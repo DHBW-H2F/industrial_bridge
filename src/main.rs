@@ -1,13 +1,23 @@
+use std::cell::RefCell;
+use std::sync::Arc;
 use std::{collections::HashMap, fs::File};
 
-use log::{debug, error, info, warn};
+use log::{debug, info};
 
 use clap::Parser;
+
+use tokio::sync::Mutex;
+use tokio::task::JoinSet;
+
+use std::ops::DerefMut;
 
 mod app_config;
 use app_config::AppConfig;
 
 use modbus_device;
+use modbus_device::modbus_device_async::ModbusConnexionAsync;
+use modbus_device::modbus_device_async::ModbusDeviceAsync;
+use modbus_device::utils::get_defs_from_json;
 
 use config;
 
@@ -26,10 +36,11 @@ struct Args {
 
 #[derive(Debug)]
 struct Devices {
-    modbus: HashMap<String, modbus_device::ModbusDevice>,
+    modbus: HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     let args = Args::parse();
     let config = config::Config::builder()
@@ -65,23 +76,44 @@ fn main() {
                 device.1.holding_registers
             ),
         };
-        let d = modbus_device::ModbusDevice {
-            ctx: match modbus_device::connect(addr) {
-                Ok(ctx) => ctx,
-                Err(err) => panic!("Error connecting to device {addr} ({err})"),
-            },
-            input_registers: match modbus_device::get_defs_from_json(input_registers_json) {
+        let d = ModbusDeviceAsync::new(
+            addr,
+            match get_defs_from_json(input_registers_json) {
                 Ok(registers) => registers,
                 Err(err) => panic!("Could not load input registers definition from file ({err})"),
             },
-            holding_registers: match modbus_device::get_defs_from_json(holding_registers_json) {
+            match get_defs_from_json(holding_registers_json) {
                 Ok(registers) => registers,
                 Err(err) => panic!("Could not load holding registers definition from file ({err})"),
             },
-            addr,
-        };
-        devices.modbus.insert(device.0.clone(), d);
+        );
+        devices
+            .modbus
+            .insert(device.0.clone(), Arc::new(Mutex::new(d)));
     }
 
-    debug!("{devices:?}");
+    let modbus_devices = Arc::new(RefCell::new(devices.modbus));
+    {
+        let mut set = JoinSet::new();
+        for (name, device) in modbus_devices.clone().borrow().iter() {
+            let d = device.clone();
+            let name = name.clone();
+            set.spawn(async move {
+                d.lock().await.connect().await.unwrap();
+                info!("Connected to {name}")
+            });
+        }
+
+        async { while set.join_next().await.is_some() {} }.await;
+    }
+
+    let mut modbus_devices_mut = modbus_devices.borrow_mut();
+    let mut electrolyzer_ref = modbus_devices_mut
+        .get_mut("electrolyzer")
+        .unwrap()
+        .lock()
+        .await;
+    let electrolyzer: &mut ModbusDeviceAsync = electrolyzer_ref.deref_mut();
+    let reg_dump = electrolyzer.dump_input_registers().await.unwrap();
+    debug!("{reg_dump:?}");
 }

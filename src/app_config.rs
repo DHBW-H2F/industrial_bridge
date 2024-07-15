@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use config::Environment;
-
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
