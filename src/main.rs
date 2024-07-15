@@ -39,6 +39,22 @@ struct Devices {
     modbus: HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>,
 }
 
+async fn connect_modbus(
+    modbus_devices: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+) {
+    let mut set = JoinSet::new();
+    for (name, device) in modbus_devices.borrow().iter() {
+        let d = device.clone();
+        let name = name.clone();
+        set.spawn(async move {
+            d.lock().await.connect().await.unwrap();
+            info!("Connected to {name}")
+        });
+    }
+
+    async { while set.join_next().await.is_some() {} }.await;
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -93,19 +109,7 @@ async fn main() {
     }
 
     let modbus_devices = Arc::new(RefCell::new(devices.modbus));
-    {
-        let mut set = JoinSet::new();
-        for (name, device) in modbus_devices.clone().borrow().iter() {
-            let d = device.clone();
-            let name = name.clone();
-            set.spawn(async move {
-                d.lock().await.connect().await.unwrap();
-                info!("Connected to {name}")
-            });
-        }
-
-        async { while set.join_next().await.is_some() {} }.await;
-    }
+    connect_modbus(modbus_devices.clone()).await;
 
     let mut modbus_devices_mut = modbus_devices.borrow_mut();
     let mut electrolyzer_ref = modbus_devices_mut
