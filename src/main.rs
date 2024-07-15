@@ -1,4 +1,5 @@
 use core::panic;
+use influxdb::InfluxDbWriteable;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,13 +11,16 @@ use clap::Parser;
 
 use modbus_device::errors::ModbusError;
 use modbus_device::types::RegisterValue;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
 
 use backoff::ExponentialBackoff;
 
 mod app_config;
 use app_config::AppConfig;
+
+mod types_conversion;
+use types_conversion::LocalRegisterValue;
 
 use modbus_device;
 use modbus_device::modbus_device_async::ModbusConnexionAsync;
@@ -40,7 +44,12 @@ struct Args {
 
 #[derive(Debug)]
 struct Devices {
-    modbus: HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>,
+    modbus: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+}
+
+#[derive(Debug)]
+struct Remotes {
+    influxdb: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
 }
 
 // Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
@@ -161,8 +170,42 @@ async fn fetch_modbus(
     res
 }
 
+async fn send_data_to_influxdb(
+    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
+    data_available: Arc<Notify>,
+    data: Arc<RwLock<HashMap<String, HashMap<String, RegisterValue>>>>,
+) {
+    loop {
+        // wait for new data
+        let _ = data_available.notified().await;
+
+        info!("New data available : starting push");
+
+        for (name, remote) in remotes.lock().await.iter() {
+            info!("Sending to remote {name}");
+            for (source, values) in data.read().await.iter() {
+                let mut query =
+                    influxdb::Timestamp::from(chrono::offset::Local::now()).into_query(source);
+                for (field, value) in values {
+                    query = query.add_field(field, LocalRegisterValue(*value));
+                }
+
+                match remote.lock().await.query(query).await {
+                    Ok(res) => {
+                        if !res.is_empty() {
+                            error!("There was an error sending data to remote {name} ({res})");
+                        }
+                    }
+                    Err(err) => error!("There was an error sending data to remote {name} ({err})"),
+                };
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    // Initialize utils
     env_logger::init();
     let args = Args::parse();
     let config = config::Config::builder()
@@ -172,30 +215,29 @@ async fn main() {
 
     let app: AppConfig = config.try_deserialize().unwrap();
 
+    // Initialize our targets from config
+    // panic on error (better catch it here at launch)
     let mut devices = Devices {
-        modbus: HashMap::new(),
+        modbus: Arc::new(RefCell::new(HashMap::new())),
     };
 
-    for device in &app.devices.modbus {
-        let addr = match device.1.remote.parse() {
+    for (name, device) in &app.devices.modbus {
+        let addr = match device.remote.parse() {
             Ok(addr) => addr,
-            Err(err) => panic!(
-                "Invalid remote address entered {0} ({err})",
-                device.1.remote
-            ),
+            Err(err) => panic!("Invalid remote address entered {0} ({err})", device.remote),
         };
-        let input_registers_json = match File::open(device.1.input_registers.clone()) {
+        let input_registers_json = match File::open(device.input_registers.clone()) {
             Ok(file) => file,
             Err(err) => panic!(
                 "Could not open the file containing the input registers definition : {0} ({err:?})",
-                device.1.input_registers
+                device.input_registers
             ),
         };
-        let holding_registers_json = match File::open(device.1.holding_registers.clone()) {
+        let holding_registers_json = match File::open(device.holding_registers.clone()) {
             Ok(file) => file,
             Err(err) => panic!(
                 "Could not open the file containing the holding registers definition : {0} ({err:?})",
-                device.1.holding_registers
+                device.holding_registers
             ),
         };
         let d = ModbusDeviceAsync::new(
@@ -211,18 +253,62 @@ async fn main() {
         );
         devices
             .modbus
-            .insert(device.0.clone(), Arc::new(Mutex::new(d)));
+            .clone()
+            .borrow_mut()
+            .insert(name.clone(), Arc::new(Mutex::new(d)));
     }
 
-    let modbus_devices = Arc::new(RefCell::new(devices.modbus));
-    connect_modbus(modbus_devices.clone()).await;
+    // Initialize the remotes
+    let remotes = Remotes {
+        influxdb: Arc::new(Mutex::new(HashMap::new())),
+    };
 
+    for (name, remote) in &app.remotes.influx_db {
+        let remote_dev = Arc::new(Mutex::new(
+            influxdb::Client::new(remote.remote.clone(), remote.bucket.clone())
+                .with_token(remote.token.clone()),
+        ));
+        match remote_dev.lock().await.ping().await {
+            Ok(res) => info!("Succesfully connected to {name} ({res:?})"),
+            Err(err) => panic!("Could not connect to remote {name} ({err})"),
+        };
+        remotes
+            .influxdb
+            .lock()
+            .await
+            .insert(name.clone(), remote_dev);
+    }
+
+    // connect to all modbus devices
+    connect_modbus(devices.modbus.clone()).await;
+
+    // Data fetch is triggered at the interval entered in configuration
     let mut interval = tokio::time::interval(Duration::from_secs(app.period));
 
-    loop {
-        interval.tick().await;
-        let modbus_data = fetch_modbus(modbus_devices.clone()).await;
+    let data_available = Arc::new(Notify::new());
 
-        debug!("{modbus_data:?}");
+    let data_received = Arc::new(RwLock::new(HashMap::new()));
+    // Start the task that send data to remotes
+    {
+        let influxdb_remote = remotes.influxdb.clone();
+        let data_available = data_available.clone();
+        let data_received = data_received.clone();
+        tokio::task::spawn(async move {
+            send_data_to_influxdb(influxdb_remote, data_available, data_received).await;
+        });
+    }
+
+    loop {
+        // Wait for the configured time
+        interval.tick().await;
+
+        // Fetch all data
+        let data_out = data_received.clone();
+        let mut rec_out = data_out.write().await;
+        rec_out.clear();
+        rec_out.extend(fetch_modbus(devices.modbus.clone()).await);
+
+        // Advertise the new data
+        data_available.notify_one();
     }
 }

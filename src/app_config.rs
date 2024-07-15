@@ -23,9 +23,9 @@ pub struct Devices {
 
 #[derive(Deserialize, Debug)]
 pub struct InfluxDBRemote {
-    remote: String,
-    bucket: String,
-    token: Option<String>,
+    pub remote: String,
+    pub bucket: String,
+    pub token: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -35,7 +35,7 @@ pub struct PrometheusRemote {
 
 #[derive(Deserialize, Debug)]
 pub struct Remotes {
-    influx_db: HashMap<String, InfluxDBRemote>,
+    pub influx_db: HashMap<String, InfluxDBRemote>,
     prometheus: HashMap<String, PrometheusRemote>,
 }
 
