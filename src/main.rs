@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, fs::File};
+use tokio::join;
 
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 
 use clap::Parser;
 
@@ -15,6 +16,11 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
 
 use backoff::ExponentialBackoff;
+
+use prometheus::Gauge;
+use url::Url;
+
+use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
 
 mod app_config;
 use app_config::AppConfig;
@@ -47,9 +53,10 @@ struct Devices {
     modbus: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 struct Remotes {
     influxdb: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
+    prometheus: Arc<Mutex<HashMap<String, Arc<Mutex<PrometheusMetricsPusher>>>>>,
 }
 
 // Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
@@ -170,8 +177,8 @@ async fn fetch_modbus(
     res
 }
 
-async fn send_data_to_influxdb(
-    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
+async fn send_data_to_remotes(
+    remotes: Arc<Mutex<Remotes>>,
     data_available: Arc<Notify>,
     data: Arc<RwLock<HashMap<String, HashMap<String, RegisterValue>>>>,
 ) {
@@ -181,24 +188,63 @@ async fn send_data_to_influxdb(
 
         info!("New data available : starting push");
 
-        for (name, remote) in remotes.lock().await.iter() {
-            info!("Sending to remote {name}");
-            for (source, values) in data.read().await.iter() {
-                let mut query =
-                    influxdb::Timestamp::from(chrono::offset::Local::now()).into_query(source);
-                for (field, value) in values {
-                    query = query.add_field(field, LocalRegisterValue(*value));
-                }
+        let remotes = remotes.lock().await;
+        join!(
+            send_data_to_influxdb(remotes.influxdb.clone(), data.clone()),
+            send_data_to_prometheus(remotes.prometheus.clone(), data.clone()),
+        );
+    }
+}
 
-                match remote.lock().await.query(query).await {
-                    Ok(res) => {
-                        if !res.is_empty() {
-                            error!("There was an error sending data to remote {name} ({res})");
-                        }
-                    }
-                    Err(err) => error!("There was an error sending data to remote {name} ({err})"),
-                };
+async fn send_data_to_prometheus(
+    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<PrometheusMetricsPusher>>>>>,
+    data: Arc<RwLock<HashMap<String, HashMap<String, RegisterValue>>>>,
+) {
+    for (name, remote) in remotes.lock().await.iter() {
+        info!("Sending to remote {name}");
+        for (source, values) in data.read().await.iter() {
+            let registry = prometheus::Registry::new();
+            for (field, value) in values {
+                let gauge =
+                    Gauge::new(field.replace(&['-', '/', '[', ']'][..], "_"), field).unwrap();
+                gauge.set(LocalRegisterValue(*value).into());
+                registry.register(Box::new(gauge)).unwrap();
             }
+
+            match remote
+                .lock()
+                .await
+                .push_all(source, &HashMap::new(), registry.gather())
+                .await
+            {
+                Ok(_) => {}
+                Err(err) => error!("There was an error sending data to remote {name} ({err:?})"),
+            };
+        }
+    }
+}
+
+async fn send_data_to_influxdb(
+    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
+    data: Arc<RwLock<HashMap<String, HashMap<String, RegisterValue>>>>,
+) {
+    for (name, remote) in remotes.lock().await.iter() {
+        info!("Sending to remote {name}");
+        for (source, values) in data.read().await.iter() {
+            let mut query =
+                influxdb::Timestamp::from(chrono::offset::Local::now()).into_query(source);
+            for (field, value) in values {
+                query = query.add_field(field, LocalRegisterValue(*value));
+            }
+
+            match remote.lock().await.query(query).await {
+                Ok(res) => {
+                    if !res.is_empty() {
+                        error!("There was an error sending data to remote {name} ({res})");
+                    }
+                }
+                Err(err) => error!("There was an error sending data to remote {name} ({err})"),
+            };
         }
     }
 }
@@ -217,7 +263,7 @@ async fn main() {
 
     // Initialize our targets from config
     // panic on error (better catch it here at launch)
-    let mut devices = Devices {
+    let devices = Devices {
         modbus: Arc::new(RefCell::new(HashMap::new())),
     };
 
@@ -261,6 +307,7 @@ async fn main() {
     // Initialize the remotes
     let remotes = Remotes {
         influxdb: Arc::new(Mutex::new(HashMap::new())),
+        prometheus: Arc::new(Mutex::new(HashMap::new())),
     };
 
     for (name, remote) in &app.remotes.influx_db {
@@ -279,6 +326,15 @@ async fn main() {
             .insert(name.clone(), remote_dev);
     }
 
+    for (name, remote) in &app.remotes.prometheus {
+        let client = reqwest::Client::new();
+        let pusher = Arc::new(Mutex::new(
+            PrometheusMetricsPusher::from(client, &Url::parse(remote.remote.as_str()).unwrap())
+                .unwrap(),
+        ));
+        remotes.prometheus.lock().await.insert(name.clone(), pusher);
+    }
+
     // connect to all modbus devices
     connect_modbus(devices.modbus.clone()).await;
 
@@ -290,11 +346,11 @@ async fn main() {
     let data_received = Arc::new(RwLock::new(HashMap::new()));
     // Start the task that send data to remotes
     {
-        let influxdb_remote = remotes.influxdb.clone();
         let data_available = data_available.clone();
         let data_received = data_received.clone();
         tokio::task::spawn(async move {
-            send_data_to_influxdb(influxdb_remote, data_available, data_received).await;
+            send_data_to_remotes(Arc::new(Mutex::new(remotes)), data_available, data_received)
+                .await;
         });
     }
 

@@ -17,3 +17,8 @@ backoff = { version = "0.4.0", features = ["tokio"] }
 tokio-modbus = "0.13.1"
 influxdb = "0.7.2"
 chrono = "0.4.38"
+prometheus_push = { version = "0.4.5", features = ["prometheus_crate", "with_reqwest"] }
+reqwest = "0.12.5"
+prometheus = "0.13.4"
+url = "2.5.2"
+urlencoding = "2.1.3"

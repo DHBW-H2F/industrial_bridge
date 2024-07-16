@@ -30,13 +30,13 @@ pub struct InfluxDBRemote {
 
 #[derive(Deserialize, Debug)]
 pub struct PrometheusRemote {
-    remote: String,
+    pub remote: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct Remotes {
     pub influx_db: HashMap<String, InfluxDBRemote>,
-    prometheus: HashMap<String, PrometheusRemote>,
+    pub prometheus: HashMap<String, PrometheusRemote>,
 }
 
 #[derive(Deserialize, Debug)]
