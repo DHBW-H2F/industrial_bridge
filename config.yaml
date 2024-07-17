@@ -1,9 +1,18 @@
+period: 15
 devices:
   modbus:
-    electrolyzer:
-      remote: "127.0.0.1:4502"
-      input_registers: "input_registers.json"
-      holding_registers: "holding_registers.json"
+    TCP:
+      electrolyzer:
+        remote: "127.0.0.1:4502"
+        input_registers: "input_registers.json"
+        holding_registers: "holding_registers.json"
+    RTU:
+      electrolyzer-meter:
+        remote: "/dev/ttyACM0"
+        slave: 1
+        speed: 9600
+        input_registers: "meter_input.json"
+        holding_registers: "meter_holding.json"
   S7:
     compressor:
       remote: 192.168.1.16:102
@@ -14,6 +23,7 @@ remotes:
     local_influx:
       remote: "http://localhost:8086"
       bucket: "electrolyzer"
+      token: "TOKEN"
   prometheus:
     prometheus:
-      remote: "http://1.1.1.1:9091/metrics/job/job-name"
+      remote: "http://1.1.1.1:9091"

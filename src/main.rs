@@ -5,13 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, fs::File};
 use tokio::join;
+use tokio_modbus::Slave;
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use clap::Parser;
 
 use modbus_device::errors::ModbusError;
-use modbus_device::types::RegisterValue;
+use modbus_device::types::{ModBusContext, RTUContext, RegisterValue, TCPContext};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
 
@@ -23,7 +24,7 @@ use url::Url;
 use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
 
 mod app_config;
-use app_config::AppConfig;
+use app_config::{AppConfig, ModbusDevice};
 
 mod types_conversion;
 use types_conversion::LocalRegisterValue;
@@ -267,27 +268,78 @@ async fn main() {
         modbus: Arc::new(RefCell::new(HashMap::new())),
     };
 
-    for (name, device) in &app.devices.modbus {
-        let addr = match device.remote.parse() {
-            Ok(addr) => addr,
-            Err(err) => panic!("Invalid remote address entered {0} ({err})", device.remote),
+    let modbus_devices = match app.devices.modbus {
+        None => {
+            info!("There is no modbus devices set ");
+            HashMap::new()
+        }
+        Some(modbus_devices) => {
+            let mut res_devices: HashMap<String, app_config::ModbusDevice> =
+                match modbus_devices.tcp {
+                    Some(tcp_devices) => tcp_devices
+                        .iter()
+                        .map(|(val, field)| (val.clone(), field.clone().into()))
+                        .collect(),
+                    None => {
+                        info!("There is no modbus TCP devices set");
+                        HashMap::new()
+                    }
+                };
+            match modbus_devices.rtu {
+                Some(rtu_devices) => {
+                    res_devices.extend(
+                        rtu_devices
+                            .iter()
+                            .map(|(val, field)| (val.clone(), field.clone().into()))
+                            .collect::<HashMap<String, app_config::ModbusDevice>>(),
+                    );
+                }
+                None => info!("There is no modbus RTU devices set"),
+            }
+            res_devices
+        }
+    };
+
+    for (name, device) in &modbus_devices {
+        let device_ctx: ModBusContext = match device {
+            app_config::ModbusDevice::TCP(dev) => {
+                let addr = match dev.remote.parse() {
+                    Ok(addr) => addr,
+                    Err(err) => panic!("Invalid remote address entered {0} ({err})", dev.remote),
+                };
+                TCPContext { addr }.into()
+            }
+            app_config::ModbusDevice::RTU(dev) => RTUContext {
+                port: dev.port.clone(),
+                slave: Slave(dev.slave as u8),
+                speed: dev.speed,
+            }
+            .into(),
         };
-        let input_registers_json = match File::open(device.input_registers.clone()) {
+        let input_registers = match device {
+            ModbusDevice::TCP(dev) => &dev.input_registers,
+            ModbusDevice::RTU(dev) => &dev.input_registers,
+        };
+        let holding_registers = match device {
+            ModbusDevice::TCP(dev) => &dev.holding_registers,
+            ModbusDevice::RTU(dev) => &dev.holding_registers,
+        };
+        let input_registers_json = match File::open(input_registers.clone()) {
             Ok(file) => file,
             Err(err) => panic!(
                 "Could not open the file containing the input registers definition : {0} ({err:?})",
-                device.input_registers
+                input_registers
             ),
         };
-        let holding_registers_json = match File::open(device.holding_registers.clone()) {
+        let holding_registers_json = match File::open(holding_registers.clone()) {
             Ok(file) => file,
             Err(err) => panic!(
                 "Could not open the file containing the holding registers definition : {0} ({err:?})",
-                device.holding_registers
+                holding_registers
             ),
         };
         let d = ModbusDeviceAsync::new(
-            addr,
+            device_ctx,
             match get_defs_from_json(input_registers_json) {
                 Ok(registers) => registers,
                 Err(err) => panic!("Could not load input registers definition from file ({err})"),
@@ -310,29 +362,42 @@ async fn main() {
         prometheus: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    for (name, remote) in &app.remotes.influx_db {
-        let remote_dev = Arc::new(Mutex::new(
-            influxdb::Client::new(remote.remote.clone(), remote.bucket.clone())
-                .with_token(remote.token.clone()),
-        ));
-        match remote_dev.lock().await.ping().await {
-            Ok(res) => info!("Succesfully connected to {name} ({res:?})"),
-            Err(err) => panic!("Could not connect to remote {name} ({err})"),
-        };
-        remotes
-            .influxdb
-            .lock()
-            .await
-            .insert(name.clone(), remote_dev);
+    match app.remotes.influx_db {
+        None => info!("There is no influxdb remote"),
+        Some(influxdb_remotes) => {
+            for (name, remote) in influxdb_remotes {
+                let remote_dev = Arc::new(Mutex::new(
+                    influxdb::Client::new(remote.remote.clone(), remote.bucket.clone())
+                        .with_token(remote.token.clone()),
+                ));
+                match remote_dev.lock().await.ping().await {
+                    Ok(res) => info!("Succesfully connected to {name} ({res:?})"),
+                    Err(err) => panic!("Could not connect to remote {name} ({err})"),
+                };
+                remotes
+                    .influxdb
+                    .lock()
+                    .await
+                    .insert(name.clone(), remote_dev);
+            }
+        }
     }
 
-    for (name, remote) in &app.remotes.prometheus {
-        let client = reqwest::Client::new();
-        let pusher = Arc::new(Mutex::new(
-            PrometheusMetricsPusher::from(client, &Url::parse(remote.remote.as_str()).unwrap())
-                .unwrap(),
-        ));
-        remotes.prometheus.lock().await.insert(name.clone(), pusher);
+    match app.remotes.prometheus {
+        None => info!("There is no prometheus"),
+        Some(prometheus_remotes) => {
+            for (name, remote) in prometheus_remotes {
+                let client = reqwest::Client::new();
+                let pusher = Arc::new(Mutex::new(
+                    PrometheusMetricsPusher::from(
+                        client,
+                        &Url::parse(remote.remote.as_str()).unwrap(),
+                    )
+                    .unwrap(),
+                ));
+                remotes.prometheus.lock().await.insert(name.clone(), pusher);
+            }
+        }
     }
 
     // connect to all modbus devices
@@ -363,6 +428,7 @@ async fn main() {
         let mut rec_out = data_out.write().await;
         rec_out.clear();
         rec_out.extend(fetch_modbus(devices.modbus.clone()).await);
+        debug!("{rec_out:?}");
 
         // Advertise the new data
         data_available.notify_one();

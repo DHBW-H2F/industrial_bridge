@@ -2,11 +2,35 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
-pub struct ModbusDevices {
+#[derive(Deserialize, Debug, Clone)]
+pub struct ModbusTCPDevice {
     pub remote: String,
     pub input_registers: String,
     pub holding_registers: String,
+}
+#[derive(Deserialize, Debug, Clone)]
+pub struct ModbusRTUDevice {
+    pub port: String,
+    pub slave: u32,
+    pub speed: u32,
+    pub input_registers: String,
+    pub holding_registers: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub enum ModbusDevice {
+    TCP(ModbusTCPDevice),
+    RTU(ModbusRTUDevice),
+}
+impl Into<ModbusDevice> for ModbusRTUDevice {
+    fn into(self) -> ModbusDevice {
+        ModbusDevice::RTU(self)
+    }
+}
+impl Into<ModbusDevice> for ModbusTCPDevice {
+    fn into(self) -> ModbusDevice {
+        ModbusDevice::TCP(self)
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -16,8 +40,14 @@ pub struct S7Devices {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct ModbusDevices {
+    pub tcp: Option<HashMap<String, ModbusTCPDevice>>,
+    pub rtu: Option<HashMap<String, ModbusRTUDevice>>,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Devices {
-    pub modbus: HashMap<String, ModbusDevices>,
+    pub modbus: Option<ModbusDevices>,
     s7: HashMap<String, S7Devices>,
 }
 
@@ -35,8 +65,8 @@ pub struct PrometheusRemote {
 
 #[derive(Deserialize, Debug)]
 pub struct Remotes {
-    pub influx_db: HashMap<String, InfluxDBRemote>,
-    pub prometheus: HashMap<String, PrometheusRemote>,
+    pub influx_db: Option<HashMap<String, InfluxDBRemote>>,
+    pub prometheus: Option<HashMap<String, PrometheusRemote>>,
 }
 
 #[derive(Deserialize, Debug)]
