@@ -1076,7 +1076,6 @@ dependencies = [
 [[package]]
 name = "modbus_device"
 version = "0.1.0"
-source = "git+https://github.com/lkzjdnb/modbus_device.git?branch=async#0eac01d489c5ab7b601ca2c05ef11f77d3b8cbe5"
 dependencies = [
  "log",
  "serde",

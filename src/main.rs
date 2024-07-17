@@ -400,6 +400,7 @@ async fn main() {
         }
     }
 
+    debug!("{0:?}", devices);
     // connect to all modbus devices
     connect_modbus(devices.modbus.clone()).await;
 
