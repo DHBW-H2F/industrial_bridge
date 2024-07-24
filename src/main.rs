@@ -1,6 +1,7 @@
 use core::panic;
 use influxdb::InfluxDbWriteable;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, fs::File};
@@ -12,7 +13,7 @@ use log::{debug, error, info, warn};
 use clap::Parser;
 
 use modbus_device::errors::ModbusError;
-use modbus_device::types::{ModBusContext, RTUContext, RegisterValue, TCPContext};
+use modbus_device::types::{ModBusContext, RTUContext, TCPContext};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
 
@@ -27,12 +28,15 @@ mod app_config;
 use app_config::{AppConfig, ModbusDevice};
 
 mod types_conversion;
-use types_conversion::LocalRegisterValue;
+use types_conversion::{convert_hashmap, RegisterValue};
 
 use modbus_device;
 use modbus_device::modbus_device_async::ModbusConnexionAsync;
 use modbus_device::modbus_device_async::ModbusDeviceAsync;
 use modbus_device::utils::get_defs_from_json;
+
+use s7_device::S7Connexion;
+use s7_device::S7Device;
 
 use config;
 
@@ -49,9 +53,9 @@ struct Args {
     config_file: String,
 }
 
-#[derive(Debug)]
 struct Devices {
-    modbus: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+    modbus: Rc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+    s7: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>,
 }
 
 // #[derive(Debug)]
@@ -63,7 +67,7 @@ struct Remotes {
 // Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
 // The connection for all devices is realized in parallel
 async fn connect_modbus(
-    modbus_devices: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+    modbus_devices: Rc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
 ) {
     // Create a task for each target
     let mut set = JoinSet::new();
@@ -80,6 +84,29 @@ async fn connect_modbus(
                 Ok((name, res)) => match res {
                     Ok(_) => info!("Connected to {name}"),
                     Err(err) => panic!("Could not connect to {name} ({err})"),
+                },
+                Err(err) => panic!("Error while joining connection threads ({err})"),
+            }
+        }
+    }
+    .await;
+}
+async fn connect_s7(s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>) {
+    // Create a task for each target
+    let mut set = JoinSet::new();
+    for (name, device) in s7_devices.borrow().iter() {
+        let d = device.clone();
+        let name = name.clone();
+        set.spawn(async move { (name, d.lock().await.connect().await) });
+    }
+
+    // Wait for completion
+    async {
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok((name, res)) => match res {
+                    Ok(_) => info!("Connected to {name}"),
+                    Err(err) => panic!("Could not connect to {name} ({err:?})"),
                 },
                 Err(err) => panic!("Error while joining connection threads ({err})"),
             }
@@ -139,7 +166,7 @@ async fn manage_modbus_error(
 // Calls manage_modbus_error on error to try to reconnect
 // The data fetch if realized in parallel for each target
 async fn fetch_modbus(
-    modbus_devices: Arc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
+    modbus_devices: Rc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
 ) -> HashMap<String, HashMap<String, RegisterValue>> {
     // Create a task for each device
     let mut set = JoinSet::new();
@@ -148,10 +175,10 @@ async fn fetch_modbus(
         let name = name.clone();
         set.spawn(async move {
             info!("Fetching modbus input registers from {name}");
-            let data: Result<HashMap<String, RegisterValue>, _> =
+            let data: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
                 d.lock().await.dump_input_registers().await;
             match data {
-                Ok(val) => Some(HashMap::from([(name, val)])),
+                Ok(val) => Some(HashMap::from([(name, convert_hashmap(val))])),
                 Err(err) => {
                     let _ = manage_modbus_error(err, d.clone()).await;
                     return None;
@@ -167,10 +194,52 @@ async fn fetch_modbus(
             match result {
                 Ok(val) => {
                     if val.is_some() {
-                        res.extend(val.unwrap())
+                        res.extend(val.unwrap());
                     }
                 }
                 Err(err) => error!("There was an error joining the tasks responsible for fetching modbus data ({err})"),
+            }
+        }
+    }
+    .await;
+    res
+}
+async fn fetch_s7(
+    s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>,
+) -> HashMap<String, HashMap<String, RegisterValue>> {
+    // Create a task for each device
+    let mut set = JoinSet::new();
+    for (name, device) in s7_devices.borrow().iter() {
+        let d = device.clone();
+        let name = name.clone();
+        set.spawn(async move {
+            info!("Fetching s7 registers from {name}");
+            let data: Result<HashMap<String, s7_device::types::RegisterValue>, _> =
+                d.lock().await.dump_registers().await;
+            match data {
+                Ok(val) => Some(HashMap::from([(name, convert_hashmap(val))])),
+                Err(_err) => {
+                    todo!();
+                    // let _ = manage_s7_error(err, d.clone()).await;
+                    // return None;
+                }
+            }
+        });
+    }
+
+    // join the tasks and merge the results
+    let mut res: HashMap<String, HashMap<String, RegisterValue>> = HashMap::new();
+    async {
+        while let Some(result) = set.join_next().await {
+            match result {
+                Ok(val) => {
+                    if val.is_some() {
+                        res.extend(val.unwrap())
+                    }
+                }
+                Err(err) => error!(
+                    "There was an error joining the tasks responsible for fetching s7 data ({err})"
+                ),
             }
         }
     }
@@ -208,7 +277,7 @@ async fn send_data_to_prometheus(
             for (field, value) in values {
                 let gauge =
                     Gauge::new(field.replace(&['-', '/', '[', ']'][..], "_"), field).unwrap();
-                gauge.set(LocalRegisterValue(*value).into());
+                gauge.set(value.clone().into());
                 registry.register(Box::new(gauge)).unwrap();
             }
 
@@ -235,7 +304,7 @@ async fn send_data_to_influxdb(
             let mut query =
                 influxdb::Timestamp::from(chrono::offset::Local::now()).into_query(source);
             for (field, value) in values {
-                query = query.add_field(field, LocalRegisterValue(*value));
+                query = query.add_field(field, value.clone());
             }
 
             match remote.lock().await.query(query).await {
@@ -265,7 +334,8 @@ async fn main() {
     // Initialize our targets from config
     // panic on error (better catch it here at launch)
     let devices = Devices {
-        modbus: Arc::new(RefCell::new(HashMap::new())),
+        modbus: Rc::new(RefCell::new(HashMap::new())),
+        s7: Rc::new(RefCell::new(HashMap::new())),
     };
 
     let modbus_devices = match app.devices.modbus {
@@ -355,6 +425,35 @@ async fn main() {
             .borrow_mut()
             .insert(name.clone(), Arc::new(Mutex::new(d)));
     }
+    let s7_devices = match app.devices.s7 {
+        None => {
+            info!("There is no s7 devices set ");
+            HashMap::new()
+        }
+        Some(s7_devices) => s7_devices,
+    };
+
+    for (name, device) in &s7_devices {
+        let registers_json = match File::open(device.registers.clone()) {
+            Ok(file) => file,
+            Err(err) => panic!(
+                "Could not open the file containing the registers definition : {0} ({err:?})",
+                device.registers
+            ),
+        };
+        let d = S7Device::new(
+            device.remote.parse().unwrap(),
+            match s7_device::utils::get_defs_from_json(registers_json) {
+                Ok(registers) => registers,
+                Err(err) => panic!("Could not load registers definition from file ({err:?})"),
+            },
+        );
+        devices
+            .s7
+            .clone()
+            .borrow_mut()
+            .insert(name.clone(), Arc::new(Mutex::new(d)));
+    }
 
     // Initialize the remotes
     let remotes = Remotes {
@@ -400,9 +499,10 @@ async fn main() {
         }
     }
 
-    debug!("{0:?}", devices);
     // connect to all modbus devices
     connect_modbus(devices.modbus.clone()).await;
+    // connect to all S7 devices
+    connect_s7(devices.s7.clone()).await;
 
     // Data fetch is triggered at the interval entered in configuration
     let mut interval = tokio::time::interval(Duration::from_secs(app.period));
@@ -429,6 +529,8 @@ async fn main() {
         let mut rec_out = data_out.write().await;
         rec_out.clear();
         rec_out.extend(fetch_modbus(devices.modbus.clone()).await);
+
+        rec_out.extend(fetch_s7(devices.s7.clone()).await);
         debug!("{rec_out:?}");
 
         // Advertise the new data

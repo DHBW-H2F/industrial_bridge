@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 modbus_device = { git = "https://github.com/lkzjdnb/modbus_device.git", branch = "async"}
+s7_device = { git = "https://github.com/lkzjdnb/S7_devices.git"}
 clap = { version = "4.5.9", features = ["derive"] }
 config = { version = "0.14.0", features = ["yaml", "toml"] }
 env_logger = "0.11.3"

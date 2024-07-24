@@ -35,8 +35,8 @@ impl Into<ModbusDevice> for ModbusTCPDevice {
 
 #[derive(Deserialize, Debug)]
 pub struct S7Devices {
-    remote: String,
-    registers: String,
+    pub remote: String,
+    pub registers: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -48,7 +48,7 @@ pub struct ModbusDevices {
 #[derive(Deserialize, Debug)]
 pub struct Devices {
     pub modbus: Option<ModbusDevices>,
-    s7: HashMap<String, S7Devices>,
+    pub s7: Option<HashMap<String, S7Devices>>,
 }
 
 #[derive(Deserialize, Debug)]
