@@ -85,34 +85,24 @@ impl Into<f64> for RegisterValue {
         match self {
             RegisterValue::Modbus(val) => match val {
                 modbus_device::types::RegisterValue::U16(val) => val.into(),
-                modbus_device::types::RegisterValue::U32(_) => todo!(),
-                modbus_device::types::RegisterValue::U64(_) => todo!(),
-                modbus_device::types::RegisterValue::U128(_) => todo!(),
-                modbus_device::types::RegisterValue::S32(_) => todo!(),
-                modbus_device::types::RegisterValue::Enum16(_) => todo!(),
-                modbus_device::types::RegisterValue::Sized(_) => todo!(),
-                modbus_device::types::RegisterValue::Float32(_) => todo!(),
-                modbus_device::types::RegisterValue::Boolean(_) => todo!(),
+                modbus_device::types::RegisterValue::U32(val) => val.into(),
+                modbus_device::types::RegisterValue::U64(val) => val as f64,
+                modbus_device::types::RegisterValue::U128(val) => val as f64,
+                modbus_device::types::RegisterValue::S32(val) => val.into(),
+                modbus_device::types::RegisterValue::Enum16(val) => val.into(),
+                modbus_device::types::RegisterValue::Sized(_) => 0 as f64,
+                modbus_device::types::RegisterValue::Float32(val) => match val.is_nan() {
+                    true => (-1.0).into(),
+                    _ => val.into(),
+                },
+                modbus_device::types::RegisterValue::Boolean(val) => val.into(),
             },
-            RegisterValue::S7(_) => todo!(),
+            RegisterValue::S7(val) => match val {
+                s7_device::types::RegisterValue::S16(val) => val.into(),
+                s7_device::types::RegisterValue::S32(val) => val.into(),
+                s7_device::types::RegisterValue::Float32(val) => val.into(),
+                s7_device::types::RegisterValue::Boolean(val) => val.into(),
+            },
         }
     }
 }
-
-/*
-
-        match self.0 {
-            RegisterValue::U16(val) => val.into(),
-            RegisterValue::U32(val) => val.into(),
-            RegisterValue::U64(val) => val as f64,
-            RegisterValue::U128(val) => val as f64,
-            RegisterValue::S32(val) => val.into(),
-            RegisterValue::Enum16(val) => val.into(),
-            RegisterValue::Sized(_) => 0 as f64,
-            RegisterValue::Float32(val) => match val.is_nan() {
-                true => (-1.0).into(),
-                _ => val.into(),
-            },
-            RegisterValue::Boolean(val) => val.into(),
-        }
-*/
