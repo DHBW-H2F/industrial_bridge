@@ -1,5 +1,5 @@
 use core::panic;
-use influxdb::InfluxDbWriteable;
+use influxdb::{InfluxDbWriteable, Type};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -304,7 +304,7 @@ async fn send_data_to_influxdb(
             let mut query =
                 influxdb::Timestamp::from(chrono::offset::Local::now()).into_query(source);
             for (field, value) in values {
-                query = query.add_field(field, value.clone());
+                query = query.add_field(field, Into::<Type>::into(value.clone()));
             }
 
             match remote.lock().await.query(query).await {
