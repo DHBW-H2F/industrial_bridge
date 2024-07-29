@@ -175,15 +175,27 @@ async fn fetch_modbus(
         let name = name.clone();
         set.spawn(async move {
             info!("Fetching modbus input registers from {name}");
-            let data: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
+            let data_input: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
                 d.lock().await.dump_input_registers().await;
-            match data {
-                Ok(val) => Some(HashMap::from([(name, convert_hashmap(val))])),
+
+            let mut res: HashMap<String, RegisterValue> = match data_input {
+                Ok(val) => HashMap::from(convert_hashmap(val)),
                 Err(err) => {
                     let _ = manage_modbus_error(err, d.clone()).await;
-                    return None;
+                    return HashMap::new();
                 }
-            }
+            };
+
+            let data_holding: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
+                d.lock().await.dump_holding_registers().await;
+            match data_holding {
+                Ok(val) => res.extend(convert_hashmap(val)),
+                Err(err) => {
+                    let _ = manage_modbus_error(err, d.clone()).await;
+                }
+            };
+
+            HashMap::from([(name, res)])
         });
     }
 
@@ -193,9 +205,7 @@ async fn fetch_modbus(
         while let Some(result) = set.join_next().await {
             match result {
                 Ok(val) => {
-                    if val.is_some() {
-                        res.extend(val.unwrap());
-                    }
+                        res.extend(val);
                 }
                 Err(err) => error!("There was an error joining the tasks responsible for fetching modbus data ({err})"),
             }
