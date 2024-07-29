@@ -46,7 +46,7 @@ struct Args {
     #[arg(
         short,
         long,
-        default_value = "config.toml",
+        default_value = "config.yaml",
         help = "Config path",
         long_help = "Where to find the config file"
     )]
