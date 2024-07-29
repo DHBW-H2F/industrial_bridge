@@ -286,7 +286,7 @@ async fn send_data_to_prometheus(
             let registry = prometheus::Registry::new();
             for (field, value) in values {
                 let gauge =
-                    Gauge::new(field.replace(&['-', '/', '[', ']'][..], "_"), field).unwrap();
+                    Gauge::new(field.replace(&['-', '/', '[', ']', '%'][..], "_"), field).unwrap();
                 gauge.set(value.clone().into());
                 registry.register(Box::new(gauge)).unwrap();
             }
