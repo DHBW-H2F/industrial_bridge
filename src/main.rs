@@ -1,5 +1,6 @@
 use core::panic;
 use influxdb::{InfluxDbWriteable, Type};
+use s7_device::errors::S7Error;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -37,6 +38,8 @@ use modbus_device::utils::get_defs_from_json;
 
 use s7_device::S7Connexion;
 use s7_device::S7Device;
+
+use s7_client;
 
 use config;
 
@@ -214,6 +217,56 @@ async fn fetch_modbus(
     .await;
     res
 }
+
+async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(), S7Error> {
+    match err {
+        S7Error::S7ClientError(err) => match err {
+            s7_client::Error::WriteTimeout => {
+                error!("Write timeout while readind s7 trying to reconnect ({err:?})");
+                match device.lock().await.connect().await {
+                    Ok(_) => {
+                        info!("Reconnexion succesful");
+                        Ok(())
+                    }
+                    Err(err) => {
+                        error!("Reconnexion failed");
+                        Err(err)
+                    }
+                }
+            }
+            s7_client::Error::IoErr(err) => {
+                error!("Broken pipe while reading s7 device ({err}), trying to reconnect...");
+                match device.lock().await.connect().await {
+                    Ok(_) => {
+                        info!("Reconnexion succesful");
+                        Ok(())
+                    }
+                    Err(err) => {
+                        error!("Reconnexion failed");
+                        Err(err)
+                    }
+                }
+            }
+            _ => {
+                error!("There was an error reading s7 device ({err:?})");
+                Err(err.into())
+            }
+        },
+        S7Error::DeviceNotConnectedError(err) => {
+            error!("The device was not connected ({err:?}), trying to reconnect...");
+            device.lock().await.connect().await
+        }
+        S7Error::MismatchedRegisterLengthError(err) => {
+            error!("S7 device returned an unexpected response on read ({err:?})");
+            Err(err.into())
+        }
+        S7Error::RegisterDoesNotExistsError(err) => {
+            error!("Tried to read an unknown register ({err:?})");
+            Err(err.into())
+        }
+    }
+}
+
 async fn fetch_s7(
     s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>,
 ) -> HashMap<String, HashMap<String, RegisterValue>> {
@@ -228,10 +281,9 @@ async fn fetch_s7(
                 d.lock().await.dump_registers().await;
             match data {
                 Ok(val) => Some(HashMap::from([(name, convert_hashmap(val))])),
-                Err(_err) => {
-                    todo!();
-                    // let _ = manage_s7_error(err, d.clone()).await;
-                    // return None;
+                Err(err) => {
+                    let _ = manage_s7_error(err, d.clone()).await;
+                    return None;
                 }
             }
         });
