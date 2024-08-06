@@ -127,31 +127,17 @@ async fn manage_modbus_error(
         ModbusError::ModbusError(tokio_modbus::Error::Transport(err)) => match err.kind() {
             std::io::ErrorKind::BrokenPipe => {
                 error!("Broken pipe while reading register reconnecting to device ({err})");
-                backoff::future::retry(ExponentialBackoff::default(), || async {
-                    let connection_timeout_res =
-                        tokio::time::timeout(Duration::from_secs(1), device.lock().await.connect())
-                            .await;
-                    let connection_res = match connection_timeout_res {
-                        Ok(res) => res,
-                        Err(err) => {
-                            warn!("Connexion took too long, aborting ({err})");
-                            return Err(backoff::Error::transient(()));
-                        }
-                    };
-                    match connection_res {
-                        Ok(_res) => {
-                            info!("Reconnexion successful !");
-                            Ok(())
-                        }
-                        Err(err) => {
-                            warn!("Connexion error on reconnect, re-trying ({err})");
-                            Err(backoff::Error::transient(()))
-                        }
+                let connection_res = device.lock().await.connect().await;
+                return match connection_res {
+                    Ok(_res) => {
+                        info!("Reconnexion successful !");
+                        Ok(())
                     }
-                })
-                .await
-                .unwrap();
-                return Err(err.into());
+                    Err(err) => {
+                        error!("Reconnexion failed ({err:?})");
+                        Err(err.into())
+                    }
+                };
             }
             _ => {
                 error!("IOError reading registers, skipping this run ({err})");
