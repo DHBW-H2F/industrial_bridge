@@ -68,7 +68,7 @@ impl Into<String> for RegisterValue {
                 modbus_device::types::RegisterValue::U128(val) => val.to_string(),
                 modbus_device::types::RegisterValue::S32(val) => val.to_string(),
                 modbus_device::types::RegisterValue::Enum16(val) => val.to_string(),
-                modbus_device::types::RegisterValue::Sized(val) => "Not implemented".to_string(),
+                modbus_device::types::RegisterValue::Sized(val) => format!("{:x?}", val),
                 modbus_device::types::RegisterValue::Float32(val) => val.to_string(),
                 modbus_device::types::RegisterValue::Boolean(val) => match val {
                     true => "1".to_string(),

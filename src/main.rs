@@ -9,7 +9,7 @@ use std::{collections::HashMap, fs::File};
 use tokio::join;
 use tokio_modbus::Slave;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 
 use clap::Parser;
 
@@ -17,8 +17,6 @@ use modbus_device::errors::ModbusError;
 use modbus_device::types::{ModBusContext, RTUContext, TCPContext};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
-
-use backoff::ExponentialBackoff;
 
 use prometheus::Gauge;
 use url::Url;
