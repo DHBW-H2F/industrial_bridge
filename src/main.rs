@@ -1,4 +1,5 @@
 use core::panic;
+use devices::connect_devices;
 use influxdb::{InfluxDbWriteable, Type};
 use s7_device::errors::S7Error;
 use std::cell::RefCell;
@@ -13,7 +14,6 @@ use log::{debug, error, info};
 
 use clap::Parser;
 
-use modbus_device::errors::ModbusError;
 use modbus_device::types::{ModBusContext, RTUContext, TCPContext};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinSet;
@@ -23,14 +23,7 @@ use url::Url;
 
 use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
 
-mod app_config;
-use app_config::{AppConfig, ModbusDevice};
-
-mod types_conversion;
-use types_conversion::{convert_hashmap, RegisterValue};
-
 use modbus_device;
-use modbus_device::modbus_device_async::ModbusConnexionAsync;
 use modbus_device::modbus_device_async::ModbusDeviceAsync;
 use modbus_device::utils::get_defs_from_json;
 
@@ -40,6 +33,17 @@ use s7_device::S7Device;
 use s7_client;
 
 use config;
+
+mod app_config;
+use app_config::{AppConfig, ModbusDevice};
+
+mod types_conversion;
+use types_conversion::{convert_hashmap, RegisterValue};
+
+mod devices;
+
+mod modbus;
+use modbus::fetch_modbus;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -65,33 +69,6 @@ struct Remotes {
     prometheus: Arc<Mutex<HashMap<String, Arc<Mutex<PrometheusMetricsPusher>>>>>,
 }
 
-// Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
-// The connection for all devices is realized in parallel
-async fn connect_modbus(
-    modbus_devices: Rc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
-) {
-    // Create a task for each target
-    let mut set = JoinSet::new();
-    for (name, device) in modbus_devices.borrow().iter() {
-        let d = device.clone();
-        let name = name.clone();
-        set.spawn(async move { (name, d.lock().await.connect().await) });
-    }
-
-    // Wait for completion
-    async {
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok((name, res)) => match res {
-                    Ok(_) => info!("Connected to {name}"),
-                    Err(err) => panic!("Could not connect to {name} ({err})"),
-                },
-                Err(err) => panic!("Error while joining connection threads ({err})"),
-            }
-        }
-    }
-    .await;
-}
 async fn connect_s7(s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>) {
     // Create a task for each target
     let mut set = JoinSet::new();
@@ -114,92 +91,6 @@ async fn connect_s7(s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>
         }
     }
     .await;
-}
-
-// Manage errors occuring on a modbus data read, try to reconnect if a BrokenPipe is detected
-async fn manage_modbus_error(
-    err: ModbusError,
-    device: Arc<Mutex<ModbusDeviceAsync>>,
-) -> Result<(), ModbusError> {
-    match err {
-        ModbusError::ModbusError(tokio_modbus::Error::Transport(err)) => match err.kind() {
-            std::io::ErrorKind::BrokenPipe => {
-                error!("Broken pipe while reading register reconnecting to device ({err})");
-                let connection_res = device.lock().await.connect().await;
-                return match connection_res {
-                    Ok(_res) => {
-                        info!("Reconnexion successful !");
-                        Ok(())
-                    }
-                    Err(err) => {
-                        error!("Reconnexion failed ({err:?})");
-                        Err(err.into())
-                    }
-                };
-            }
-            _ => {
-                error!("IOError reading registers, skipping this run ({err})");
-                return Err(err.into());
-            }
-        },
-        err => {
-            error!("Error reading registers, skipping this run ({err:?})");
-            return Err(err.into());
-        }
-    };
-}
-
-// For all the modbus devices passed, dump all registers and returns it as a HashMap<device_name, HashMap<register_name, register_value>>
-// Calls manage_modbus_error on error to try to reconnect
-// The data fetch if realized in parallel for each target
-async fn fetch_modbus(
-    modbus_devices: Rc<RefCell<HashMap<String, Arc<Mutex<ModbusDeviceAsync>>>>>,
-) -> HashMap<String, HashMap<String, RegisterValue>> {
-    // Create a task for each device
-    let mut set = JoinSet::new();
-    for (name, device) in modbus_devices.borrow().iter() {
-        let d = device.clone();
-        let name = name.clone();
-        set.spawn(async move {
-            info!("Fetching modbus input registers from {name}");
-            let data_input: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
-                d.lock().await.dump_input_registers().await;
-
-            let mut res: HashMap<String, RegisterValue> = match data_input {
-                Ok(val) => HashMap::from(convert_hashmap(val)),
-                Err(err) => {
-                    let _ = manage_modbus_error(err, d.clone()).await;
-                    return HashMap::new();
-                }
-            };
-
-            let data_holding: Result<HashMap<String, modbus_device::types::RegisterValue>, _> =
-                d.lock().await.dump_holding_registers().await;
-            match data_holding {
-                Ok(val) => res.extend(convert_hashmap(val)),
-                Err(err) => {
-                    let _ = manage_modbus_error(err, d.clone()).await;
-                }
-            };
-
-            HashMap::from([(name, res)])
-        });
-    }
-
-    // join the tasks and merge the results
-    let mut res: HashMap<String, HashMap<String, RegisterValue>> = HashMap::new();
-    async {
-        while let Some(result) = set.join_next().await {
-            match result {
-                Ok(val) => {
-                        res.extend(val);
-                }
-                Err(err) => error!("There was an error joining the tasks responsible for fetching modbus data ({err})"),
-            }
-        }
-    }
-    .await;
-    res
 }
 
 async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(), S7Error> {
@@ -246,6 +137,10 @@ async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(
         }
         S7Error::RegisterDoesNotExistsError(err) => {
             error!("Tried to read an unknown register ({err:?})");
+            Err(err.into())
+        }
+        S7Error::InvalidRegisterValue(err) => {
+            error!("Wrong value obtained ({err:?})");
             Err(err.into())
         }
     }
@@ -546,7 +441,7 @@ async fn main() {
     }
 
     // connect to all modbus devices
-    connect_modbus(devices.modbus.clone()).await;
+    connect_devices(devices.modbus.clone()).await;
     // connect to all S7 devices
     connect_s7(devices.s7.clone()).await;
 
