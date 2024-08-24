@@ -74,5 +74,5 @@ pub struct AppConfig {
     pub devices: Devices,
     pub remotes: Remotes,
     pub period: u64,
-    pub timeout: u64,
+    pub timeout: Option<u64>,
 }

@@ -27,10 +27,8 @@ use modbus_device;
 use modbus_device::modbus_device_async::ModbusDeviceAsync;
 use modbus_device::utils::get_defs_from_json;
 
-use s7_device::S7Connexion;
+use s7_device::s7_connexion::S7Connexion;
 use s7_device::S7Device;
-
-use s7_client;
 
 use config;
 
@@ -69,33 +67,9 @@ struct Remotes {
     prometheus: Arc<Mutex<HashMap<String, Arc<Mutex<PrometheusMetricsPusher>>>>>,
 }
 
-async fn connect_s7(s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>) {
-    // Create a task for each target
-    let mut set = JoinSet::new();
-    for (name, device) in s7_devices.borrow().iter() {
-        let d = device.clone();
-        let name = name.clone();
-        set.spawn(async move { (name, d.lock().await.connect().await) });
-    }
-
-    // Wait for completion
-    async {
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok((name, res)) => match res {
-                    Ok(_) => info!("Connected to {name}"),
-                    Err(err) => panic!("Could not connect to {name} ({err:?})"),
-                },
-                Err(err) => panic!("Error while joining connection threads ({err})"),
-            }
-        }
-    }
-    .await;
-}
-
 async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(), S7Error> {
     match err {
-        S7Error::S7ClientError(err) => match err {
+        S7Error::S7ClientError { err } => match err {
             s7_client::Error::WriteTimeout => {
                 error!("Write timeout while readind s7 trying to reconnect ({err:?})");
                 match device.lock().await.connect().await {
@@ -127,19 +101,19 @@ async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(
                 Err(err.into())
             }
         },
-        S7Error::DeviceNotConnectedError(err) => {
+        S7Error::DeviceNotConnectedError => {
             error!("The device was not connected ({err:?}), trying to reconnect...");
             device.lock().await.connect().await
         }
-        S7Error::MismatchedRegisterLengthError(err) => {
+        S7Error::MismatchedRegisterLengthError => {
             error!("S7 device returned an unexpected response on read ({err:?})");
             Err(err.into())
         }
-        S7Error::RegisterDoesNotExistsError(err) => {
+        S7Error::RegisterDoesNotExistsError => {
             error!("Tried to read an unknown register ({err:?})");
             Err(err.into())
         }
-        S7Error::InvalidRegisterValue(err) => {
+        S7Error::InvalidRegisterValue => {
             error!("Wrong value obtained ({err:?})");
             Err(err.into())
         }
@@ -443,7 +417,7 @@ async fn main() {
     // connect to all modbus devices
     connect_devices(devices.modbus.clone()).await;
     // connect to all S7 devices
-    connect_s7(devices.s7.clone()).await;
+    connect_devices(devices.s7.clone()).await;
 
     // Data fetch is triggered at the interval entered in configuration
     let mut interval = tokio::time::interval(Duration::from_secs(app.period));
