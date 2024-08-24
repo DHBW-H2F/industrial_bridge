@@ -1,7 +1,6 @@
 use core::panic;
-use devices::connect_devices;
+use devices::{connect_devices, fetch_device};
 use influxdb::{InfluxDbWriteable, Type};
-use s7_device::errors::S7Error;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,7 +15,6 @@ use clap::Parser;
 
 use modbus_device::types::{ModBusContext, RTUContext, TCPContext};
 use tokio::sync::{Mutex, Notify, RwLock};
-use tokio::task::JoinSet;
 
 use prometheus::Gauge;
 use url::Url;
@@ -27,7 +25,6 @@ use modbus_device;
 use modbus_device::modbus_device_async::ModbusDeviceAsync;
 use modbus_device::utils::get_defs_from_json;
 
-use s7_device::s7_connexion::S7Connexion;
 use s7_device::S7Device;
 
 use config;
@@ -36,12 +33,9 @@ mod app_config;
 use app_config::{AppConfig, ModbusDevice};
 
 mod types_conversion;
-use types_conversion::{convert_hashmap, RegisterValue};
+use types_conversion::RegisterValue;
 
 mod devices;
-
-mod modbus;
-use modbus::fetch_modbus;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -65,101 +59,6 @@ struct Devices {
 struct Remotes {
     influxdb: Arc<Mutex<HashMap<String, Arc<Mutex<influxdb::Client>>>>>,
     prometheus: Arc<Mutex<HashMap<String, Arc<Mutex<PrometheusMetricsPusher>>>>>,
-}
-
-async fn manage_s7_error(err: S7Error, device: Arc<Mutex<S7Device>>) -> Result<(), S7Error> {
-    match err {
-        S7Error::S7ClientError { err } => match err {
-            s7_client::Error::WriteTimeout => {
-                error!("Write timeout while readind s7 trying to reconnect ({err:?})");
-                match device.lock().await.connect().await {
-                    Ok(_) => {
-                        info!("Reconnexion succesful");
-                        Ok(())
-                    }
-                    Err(err) => {
-                        error!("Reconnexion failed");
-                        Err(err)
-                    }
-                }
-            }
-            s7_client::Error::IoErr(err) => {
-                error!("Broken pipe while reading s7 device ({err}), trying to reconnect...");
-                match device.lock().await.connect().await {
-                    Ok(_) => {
-                        info!("Reconnexion succesful");
-                        Ok(())
-                    }
-                    Err(err) => {
-                        error!("Reconnexion failed");
-                        Err(err)
-                    }
-                }
-            }
-            _ => {
-                error!("There was an error reading s7 device ({err:?})");
-                Err(err.into())
-            }
-        },
-        S7Error::DeviceNotConnectedError => {
-            error!("The device was not connected ({err:?}), trying to reconnect...");
-            device.lock().await.connect().await
-        }
-        S7Error::MismatchedRegisterLengthError => {
-            error!("S7 device returned an unexpected response on read ({err:?})");
-            Err(err.into())
-        }
-        S7Error::RegisterDoesNotExistsError => {
-            error!("Tried to read an unknown register ({err:?})");
-            Err(err.into())
-        }
-        S7Error::InvalidRegisterValue => {
-            error!("Wrong value obtained ({err:?})");
-            Err(err.into())
-        }
-    }
-}
-
-async fn fetch_s7(
-    s7_devices: Rc<RefCell<HashMap<String, Arc<Mutex<S7Device>>>>>,
-) -> HashMap<String, HashMap<String, RegisterValue>> {
-    // Create a task for each device
-    let mut set = JoinSet::new();
-    for (name, device) in s7_devices.borrow().iter() {
-        let d = device.clone();
-        let name = name.clone();
-        set.spawn(async move {
-            info!("Fetching s7 registers from {name}");
-            let data: Result<HashMap<String, s7_device::types::RegisterValue>, _> =
-                d.lock().await.dump_registers().await;
-            match data {
-                Ok(val) => Some(HashMap::from([(name, convert_hashmap(val))])),
-                Err(err) => {
-                    let _ = manage_s7_error(err, d.clone()).await;
-                    return None;
-                }
-            }
-        });
-    }
-
-    // join the tasks and merge the results
-    let mut res: HashMap<String, HashMap<String, RegisterValue>> = HashMap::new();
-    async {
-        while let Some(result) = set.join_next().await {
-            match result {
-                Ok(val) => {
-                    if val.is_some() {
-                        res.extend(val.unwrap())
-                    }
-                }
-                Err(err) => error!(
-                    "There was an error joining the tasks responsible for fetching s7 data ({err})"
-                ),
-            }
-        }
-    }
-    .await;
-    res
 }
 
 async fn send_data_to_remotes(
@@ -424,7 +323,8 @@ async fn main() {
 
     let data_available = Arc::new(Notify::new());
 
-    let data_received = Arc::new(RwLock::new(HashMap::new()));
+    let data_received: Arc<RwLock<HashMap<String, HashMap<String, RegisterValue>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
     // Start the task that send data to remotes
     {
         let data_available = data_available.clone();
@@ -443,9 +343,9 @@ async fn main() {
         let data_out = data_received.clone();
         let mut rec_out = data_out.write().await;
         rec_out.clear();
-        rec_out.extend(fetch_modbus(devices.modbus.clone()).await);
+        rec_out.extend(fetch_device(devices.modbus.clone()).await);
 
-        rec_out.extend(fetch_s7(devices.s7.clone()).await);
+        rec_out.extend(fetch_device(devices.s7.clone()).await);
         debug!("{rec_out:?}");
 
         // Advertise the new data

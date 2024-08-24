@@ -1044,8 +1044,9 @@ dependencies = [
 [[package]]
 name = "industrial_device"
 version = "0.1.0"
-source = "git+https://github.com/lkzjdnb/industrial_device.git#ecd19dda49506ff940eac0f1cce958d83e5050b5"
+source = "git+https://github.com/lkzjdnb/industrial_device.git#b5c21be35efda2a78505cca034531568db5a54d0"
 dependencies = [
+ "custom_error",
  "trait-variant",
 ]
 
@@ -1243,8 +1244,9 @@ dependencies = [
 [[package]]
 name = "modbus_device"
 version = "0.1.0"
-source = "git+https://github.com/lkzjdnb/modbus_device.git?branch=async#b49524310c9df97ce02cb422ec378e83c2706ec4"
+source = "git+https://github.com/lkzjdnb/modbus_device.git?branch=async#6e5f1b8e97629c8ccad092e8c15ed3c28cc0dfb7"
 dependencies = [
+ "custom_error",
  "industrial_device",
  "log",
  "serde",
@@ -1949,7 +1951,7 @@ dependencies = [
 [[package]]
 name = "s7_device"
 version = "0.1.0"
-source = "git+https://github.com/lkzjdnb/S7_devices.git#ff31bb77caaa667b493a92e462ad4b82ffb34ab2"
+source = "git+https://github.com/lkzjdnb/S7_devices.git#7616d8c76df9732d2da4ba016808991e3817b12a"
 dependencies = [
  "custom_error",
  "de-regex",

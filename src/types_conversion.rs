@@ -1,21 +1,16 @@
 use std::{collections::HashMap, hash::Hash};
 
+use industrial_device::types::Value;
 use influxdb::Type;
 
 #[derive(Debug, Clone)]
-pub enum RegisterValue {
-    Modbus(modbus_device::types::RegisterValue),
-    S7(s7_device::types::RegisterValue),
+pub struct RegisterValue {
+    value: Value,
 }
 
-impl From<s7_device::types::RegisterValue> for RegisterValue {
-    fn from(value: s7_device::types::RegisterValue) -> Self {
-        RegisterValue::S7(value)
-    }
-}
-impl From<modbus_device::types::RegisterValue> for RegisterValue {
-    fn from(value: modbus_device::types::RegisterValue) -> Self {
-        RegisterValue::Modbus(value)
+impl From<Value> for RegisterValue {
+    fn from(value: Value) -> Self {
+        RegisterValue { value }
     }
 }
 
@@ -30,79 +25,60 @@ pub fn convert_hashmap<K: Hash + Eq + Clone, V1: Into<V2> + Clone, V2>(
 
 impl Into<Type> for RegisterValue {
     fn into(self) -> Type {
-        match self {
-            RegisterValue::Modbus(val) => match val {
-                modbus_device::types::RegisterValue::U16(val) => val.into(),
-                modbus_device::types::RegisterValue::U32(val) => val.into(),
-                modbus_device::types::RegisterValue::U64(val) => val.into(),
-                modbus_device::types::RegisterValue::U128(val) => val.to_string().into(),
-                modbus_device::types::RegisterValue::S32(val) => val.into(),
-                modbus_device::types::RegisterValue::Enum16(val) => val.into(),
-                modbus_device::types::RegisterValue::Sized(val) => format!("{0:x?}", &val).into(),
-                modbus_device::types::RegisterValue::Float32(val) => match val.is_nan() {
-                    true => (-1.0).into(),
-                    _ => val.into(),
-                },
-                modbus_device::types::RegisterValue::Boolean(val) => val.into(),
+        match self.value {
+            Value::U16(val) => val.into(),
+            Value::U32(val) => val.into(),
+            Value::U64(val) => val.into(),
+            Value::U128(val) => val.to_string().into(),
+            Value::S16(val) => val.into(),
+            Value::S32(val) => val.into(),
+            Value::Enum16(val) => val.into(),
+            Value::Sized(val) => format!("{0:x?}", &val).into(),
+            Value::Float32(val) => match val.is_nan() {
+                true => (-1.0).into(),
+                _ => val.into(),
             },
-            RegisterValue::S7(val) => match val {
-                s7_device::types::RegisterValue::S16(val) => val.into(),
-                s7_device::types::RegisterValue::S32(val) => val.into(),
-                s7_device::types::RegisterValue::Float32(val) => match val.is_nan() {
-                    true => (1.0).into(),
-                    _ => val.into(),
-                },
-                s7_device::types::RegisterValue::Boolean(val) => val.into(),
-            },
+            Value::Boolean(val) => val.into(),
         }
     }
 }
 
 impl Into<String> for RegisterValue {
     fn into(self) -> String {
-        match self {
-            RegisterValue::Modbus(val) => match val {
-                modbus_device::types::RegisterValue::U16(val) => val.to_string(),
-                modbus_device::types::RegisterValue::U32(val) => val.to_string(),
-                modbus_device::types::RegisterValue::U64(val) => val.to_string(),
-                modbus_device::types::RegisterValue::U128(val) => val.to_string(),
-                modbus_device::types::RegisterValue::S32(val) => val.to_string(),
-                modbus_device::types::RegisterValue::Enum16(val) => val.to_string(),
-                modbus_device::types::RegisterValue::Sized(val) => format!("{:x?}", val),
-                modbus_device::types::RegisterValue::Float32(val) => val.to_string(),
-                modbus_device::types::RegisterValue::Boolean(val) => match val {
-                    true => "1".to_string(),
-                    false => "2".to_string(),
-                },
+        match self.value {
+            Value::U16(val) => val.to_string(),
+            Value::U32(val) => val.to_string(),
+            Value::U64(val) => val.to_string(),
+            Value::U128(val) => val.to_string(),
+            Value::S16(val) => val.to_string(),
+            Value::S32(val) => val.to_string(),
+            Value::Enum16(val) => val.to_string(),
+            Value::Sized(val) => format!("{0:x?}", &val),
+            Value::Float32(val) => val.to_string(),
+            Value::Boolean(val) => match val {
+                true => "1".to_string(),
+                false => "2".to_string(),
             },
-            RegisterValue::S7(_) => todo!(),
         }
     }
 }
 
 impl Into<f64> for RegisterValue {
     fn into(self) -> f64 {
-        match self {
-            RegisterValue::Modbus(val) => match val {
-                modbus_device::types::RegisterValue::U16(val) => val.into(),
-                modbus_device::types::RegisterValue::U32(val) => val.into(),
-                modbus_device::types::RegisterValue::U64(val) => val as f64,
-                modbus_device::types::RegisterValue::U128(val) => val as f64,
-                modbus_device::types::RegisterValue::S32(val) => val.into(),
-                modbus_device::types::RegisterValue::Enum16(val) => val.into(),
-                modbus_device::types::RegisterValue::Sized(_) => 0 as f64,
-                modbus_device::types::RegisterValue::Float32(val) => match val.is_nan() {
-                    true => (-1.0).into(),
-                    _ => val.into(),
-                },
-                modbus_device::types::RegisterValue::Boolean(val) => val.into(),
+        match self.value {
+            Value::U16(val) => val.into(),
+            Value::U32(val) => val.into(),
+            Value::U64(val) => val as f64,
+            Value::U128(val) => val as f64,
+            Value::S16(val) => val.into(),
+            Value::S32(val) => val.into(),
+            Value::Enum16(val) => val.into(),
+            Value::Sized(_val) => 0 as f64,
+            Value::Float32(val) => match val.is_nan() {
+                true => (-1.0).into(),
+                _ => val.into(),
             },
-            RegisterValue::S7(val) => match val {
-                s7_device::types::RegisterValue::S16(val) => val.into(),
-                s7_device::types::RegisterValue::S32(val) => val.into(),
-                s7_device::types::RegisterValue::Float32(val) => val.into(),
-                s7_device::types::RegisterValue::Boolean(val) => val.into(),
-            },
+            Value::Boolean(val) => val.into(),
         }
     }
 }
