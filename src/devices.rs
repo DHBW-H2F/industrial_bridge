@@ -1,9 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use industrial_device::errors::IndustrialDeviceError;
 use industrial_device::IndustrialDevice;
-use log::{error, info};
-use tokio::{sync::Mutex, task::JoinSet};
+use log::{error, info, warn};
+use tokio::{sync::Mutex, task::JoinSet, time::timeout};
 
 use crate::types_conversion::{convert_hashmap, RegisterValue};
 
@@ -66,6 +66,14 @@ async fn manage_errors(
             error!("Error reading registers, skipping this run ({err:?})");
             return Err(err);
         }
+        IndustrialDeviceError::RegisterNotFoundError { ref name } => {
+            error!("Register not found : ({name})");
+            return Err(err);
+        }
+        IndustrialDeviceError::WrongValueType { ref val } => {
+            error!("Wrong value type : ({val})");
+            return Err(err);
+        }
     };
 }
 
@@ -74,6 +82,7 @@ async fn manage_errors(
 // The data fetch if realized in parallel for each target
 pub async fn fetch_device<T: IndustrialDevice + Send + 'static>(
     devices: Rc<RefCell<HashMap<String, Arc<Mutex<T>>>>>,
+    timeout_duration: Duration,
 ) -> HashMap<String, HashMap<String, RegisterValue>> {
     // Create a task for each device
     let mut set = JoinSet::new();
@@ -81,9 +90,15 @@ pub async fn fetch_device<T: IndustrialDevice + Send + 'static>(
         let d = device.clone();
         let name = name.clone();
         set.spawn(async move {
-            info!("Fetching modbus input registers from {name}");
+            info!("Fetching registers from {name}");
             let data_input: Result<HashMap<String, industrial_device::types::Value>, _> =
-                d.lock().await.dump_registers().await;
+                match timeout(timeout_duration, d.lock().await.dump_registers()).await {
+                    Ok(res) => res,
+                    Err(_err) => {
+                        warn!("Timeout reached while fetching {name} skipping this run");
+                        return HashMap::new();
+                    }
+                };
 
             let res: HashMap<String, RegisterValue> = match data_input {
                 Ok(val) => HashMap::from(convert_hashmap(val)),

@@ -22,8 +22,8 @@ use url::Url;
 use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
 
 use modbus_device;
-use modbus_device::modbus_device_async::ModbusDeviceAsync;
 use modbus_device::utils::get_defs_from_json;
+use modbus_device::ModbusDeviceAsync;
 
 use s7_device::S7Device;
 
@@ -314,12 +314,18 @@ async fn main() {
     }
 
     // connect to all modbus devices
-    connect_devices(devices.modbus.clone()).await;
+    let connect_modbus = connect_devices(devices.modbus.clone());
     // connect to all S7 devices
-    connect_devices(devices.s7.clone()).await;
+    let connect_s7 = connect_devices(devices.s7.clone());
+    join!(connect_modbus, connect_s7);
 
     // Data fetch is triggered at the interval entered in configuration
     let mut interval = tokio::time::interval(Duration::from_secs(app.period));
+
+    let timeout = match app.timeout {
+        Some(timeout) => Duration::from_secs(timeout),
+        None => Duration::MAX,
+    };
 
     let data_available = Arc::new(Notify::new());
 
@@ -343,9 +349,14 @@ async fn main() {
         let data_out = data_received.clone();
         let mut rec_out = data_out.write().await;
         rec_out.clear();
-        rec_out.extend(fetch_device(devices.modbus.clone()).await);
 
-        rec_out.extend(fetch_device(devices.s7.clone()).await);
+        let fetch_modbus = fetch_device(devices.modbus.clone(), timeout);
+        let fetch_s7 = fetch_device(devices.s7.clone(), timeout);
+
+        let (data_modbus, data_s7) = join!(fetch_modbus, fetch_s7);
+        rec_out.extend(data_modbus);
+        rec_out.extend(data_s7);
+
         debug!("{rec_out:?}");
 
         // Advertise the new data
