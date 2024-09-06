@@ -7,10 +7,15 @@ use tokio::{sync::Mutex, task::JoinSet, time::timeout};
 
 use crate::types_conversion::{convert_hashmap, RegisterValue};
 
+pub mod errors;
+pub mod modbus_rtu;
+pub mod modbus_tcp;
+pub mod s7;
+
 // Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
 // The connection for all devices is realized in parallel
-pub async fn connect_devices<T: IndustrialDevice + Send + 'static>(
-    devices: Rc<RefCell<HashMap<String, Arc<Mutex<T>>>>>,
+pub async fn connect_devices<T: IndustrialDevice + Send + 'static + ?Sized>(
+    devices: Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>,
 ) {
     // Create a task for each target
     let mut set = JoinSet::new();
@@ -43,7 +48,7 @@ pub async fn connect_devices<T: IndustrialDevice + Send + 'static>(
 // Manage errors occuring on a modbus data read, try to reconnect if a BrokenPipe is detected
 async fn manage_errors(
     err: IndustrialDeviceError,
-    device: Arc<Mutex<impl IndustrialDevice>>,
+    device: Arc<Mutex<Box<impl IndustrialDevice + ?Sized>>>,
 ) -> Result<(), IndustrialDeviceError> {
     match err {
         IndustrialDeviceError::DeviceNotAccessibleError { err }
@@ -80,8 +85,8 @@ async fn manage_errors(
 // For all the devices passed, dump all registers and returns it as a HashMap<device_name, HashMap<register_name, register_value>>
 // Calls manage_error on error to try to reconnect
 // The data fetch if realized in parallel for each target
-pub async fn fetch_device<T: IndustrialDevice + Send + 'static>(
-    devices: Rc<RefCell<HashMap<String, Arc<Mutex<T>>>>>,
+pub async fn fetch_device<T: IndustrialDevice + Send + 'static + ?Sized>(
+    devices: Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>,
     timeout_duration: Duration,
 ) -> HashMap<String, HashMap<String, RegisterValue>> {
     // Create a task for each device
