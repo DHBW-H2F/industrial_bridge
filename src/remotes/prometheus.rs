@@ -2,11 +2,15 @@ use std::collections::HashMap;
 
 use prometheus::Gauge;
 use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
+use serde::Deserialize;
+use url::Url;
 
 use crate::remotes::remote::RemoteError;
 use crate::remotes::Remote;
 
 use async_trait::async_trait;
+
+use super::errors::RemoteInitError;
 
 #[async_trait]
 impl Remote for PrometheusMetricsPusher {
@@ -27,5 +31,20 @@ impl Remote for PrometheusMetricsPusher {
             .await?;
 
         Ok(())
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct PrometheusRemote {
+    pub remote: String,
+}
+
+impl TryFrom<PrometheusRemote> for PrometheusMetricsPusher {
+    type Error = RemoteInitError;
+
+    fn try_from(value: PrometheusRemote) -> Result<Self, Self::Error> {
+        let client = reqwest::Client::new();
+        let pusher = PrometheusMetricsPusher::from(client, &Url::parse(&value.remote)?)?;
+        Ok(pusher)
     }
 }

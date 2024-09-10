@@ -1,3 +1,6 @@
+# Interface
+Provide the connexion to your device through an object that implements the [IndustrialDevice](https://github.com/lkzjdnb/industrial_device) trait (See [modbus_device](https://github.com/lkzjdnb/modbus_device/tree/master) and [s7_device](https://github.com/lkzjdnb/S7_devices) for an exemple of such an implemantation).
+
 # Definition
 Create a file in the src/devices/ directory named your-device.rs (ex: src/devices/modbus.rs)
 

@@ -1,8 +1,11 @@
+use std::convert::Infallible;
+
 use crate::remotes::remote::RemoteError;
 use crate::remotes::Remote;
 
 use async_trait::async_trait;
 use influxdb::{Client, InfluxDbWriteable, Type};
+use serde::Deserialize;
 
 #[async_trait]
 impl Remote for Client {
@@ -25,5 +28,21 @@ impl Remote for Client {
             Err(err) => return Err(err.into()),
         };
         Ok(())
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InfluxDBRemote {
+    pub remote: String,
+    pub bucket: String,
+    pub token: String,
+}
+
+impl TryFrom<InfluxDBRemote> for Client {
+    type Error = Infallible;
+
+    fn try_from(value: InfluxDBRemote) -> Result<Self, Self::Error> {
+        let client = Client::new(value.remote, value.bucket).with_token(value.token);
+        Ok(client)
     }
 }

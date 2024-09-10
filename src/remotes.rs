@@ -9,10 +9,12 @@ use tokio::{
 
 use crate::types_conversion::RegisterValue;
 
-mod influxdb;
-mod prometheus;
 pub mod remote;
 use remote::{Remote, RemoteError};
+
+pub mod errors;
+pub mod influxdb;
+pub mod prometheus;
 
 async fn join_remotes_tasks(set: &mut JoinSet<Result<(), RemoteError>>) {
     while let Some(result) = set.join_next().await {
@@ -29,7 +31,7 @@ async fn join_remotes_tasks(set: &mut JoinSet<Result<(), RemoteError>>) {
 }
 
 pub async fn send_data_to_remotes(
-    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<impl Remote + Send + 'static + ?Sized>>>>>,
+    remotes: Arc<Mutex<HashMap<String, Arc<Mutex<Box<impl Remote + Send + 'static + ?Sized>>>>>>,
     mut data: watch::Receiver<HashMap<String, HashMap<String, RegisterValue>>>,
 ) {
     loop {
@@ -63,7 +65,7 @@ pub async fn send_data_to_remotes(
 
 pub async fn send_data_to_remote(
     name: &str,
-    remote: Arc<Mutex<impl Remote + ?Sized>>,
+    remote: Arc<Mutex<Box<impl Remote + ?Sized>>>,
     data: &HashMap<String, HashMap<String, RegisterValue>>,
 ) -> Result<(), RemoteError> {
     info!("Sending to remote {name}");

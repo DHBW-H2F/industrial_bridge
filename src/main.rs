@@ -1,4 +1,3 @@
-use core::panic;
 use devices::{connect_devices, fetch_device};
 use industrial_device::IndustrialDevice;
 use remotes::remote::Remote;
@@ -8,15 +7,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, error, info};
+use log::{debug, error};
 
 use clap::Parser;
 
 use tokio::sync::{watch, Mutex};
-
-use url::Url;
-
-use prometheus_push::prometheus_crate::PrometheusMetricsPusher;
 
 use config;
 
@@ -69,42 +64,15 @@ async fn main() {
         ));
 
     // Initialize the remotes
-    let remotes: Arc<Mutex<HashMap<String, Arc<Mutex<dyn Remote + Send>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let remotes_box: HashMap<String, Box<dyn Remote + Send>> = app.remotes.try_into().unwrap();
 
-    match app.remotes.influx_db {
-        None => info!("There is no influxdb remote"),
-        Some(influxdb_remotes) => {
-            for (name, remote) in influxdb_remotes {
-                let remote_dev = Arc::new(Mutex::new(
-                    influxdb::Client::new(remote.remote.clone(), remote.bucket.clone())
-                        .with_token(remote.token.clone()),
-                ));
-                match remote_dev.lock().await.ping().await {
-                    Ok(res) => info!("Succesfully connected to {name} ({res:?})"),
-                    Err(err) => panic!("Could not connect to remote {name} ({err})"),
-                };
-                remotes.lock().await.insert(name.clone(), remote_dev);
-            }
-        }
-    }
-
-    match app.remotes.prometheus {
-        None => info!("There is no prometheus"),
-        Some(prometheus_remotes) => {
-            for (name, remote) in prometheus_remotes {
-                let client = reqwest::Client::new();
-                let pusher = Arc::new(Mutex::new(
-                    PrometheusMetricsPusher::from(
-                        client,
-                        &Url::parse(remote.remote.as_str()).unwrap(),
-                    )
-                    .unwrap(),
-                ));
-                remotes.lock().await.insert(name.clone(), pusher);
-            }
-        }
-    }
+    let remotes: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn Remote + Send>>>>>> =
+        Arc::new(Mutex::new(
+            remotes_box
+                .into_iter()
+                .map(|(name, val)| (name, Arc::new(Mutex::new(val))))
+                .collect(),
+        ));
 
     // connect to all devices
     connect_devices(devices.clone()).await;
