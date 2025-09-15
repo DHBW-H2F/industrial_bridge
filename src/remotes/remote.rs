@@ -7,7 +7,9 @@ use crate::types_conversion::RegisterValue;
 
 use async_trait::async_trait;
 
-custom_error! {pub RemoteError
+custom_error! {
+    /// List of error related to the push of the data to the remote
+    pub RemoteError
     DisconnectedRemoteError = "The remote is not connected",
     PushFailedError{ res: String } = "There was an error during push : {res}",
     AuthError = "Authentification error",
@@ -46,6 +48,7 @@ impl From<influxdb::Error> for RemoteError {
 }
 
 #[async_trait]
+/// Interface to describe the remote where we send all the collected data
 pub trait Remote {
     async fn send_measurement(
         &self,

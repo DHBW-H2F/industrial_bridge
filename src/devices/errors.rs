@@ -2,7 +2,9 @@ use custom_error::custom_error;
 use serde_json;
 use std::{error::Error, net::AddrParseError};
 
-custom_error! {pub DeviceInitError
+custom_error! {
+    /// List of error related to the config of the device
+    pub DeviceInitError
     CouldNotOpenDefinition{ err: Box<dyn Error>} = "Could not find definition file ({err})",
     ParsingFailed{ err: Box<dyn Error> } = "Could not parse file ({err})",
     BadRemoteUri{ err: Box<dyn Error> } = "Could not get a correct URL from passed remote address ({err})",

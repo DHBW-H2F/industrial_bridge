@@ -39,22 +39,25 @@ struct Args {
 }
 
 #[tokio::main]
+/// Main function of the bridge
 async fn main() {
     // Initialize utils
+    // configuration du logger
     env_logger::init();
+    // recupération des arguments
     let args = Args::parse();
     let config = config::Config::builder()
         .add_source(config::File::with_name(&args.config_file))
         .build()
-        .unwrap();
-
+        .unwrap(); // récupère la valeur et erreur si rien
+    
+    // récupération des informations du fichier
     let app: AppConfig = config.try_deserialize().unwrap();
-
     // Initialize our targets from config
-    // panic on error (better catch it here at launch)
+    // panic on error (better catch it here at launch)  
     let devices_box: HashMap<String, Box<dyn IndustrialDevice + Send>> =
         app.devices.try_into().unwrap();
-
+    
     let devices: Rc<RefCell<HashMap<String, Arc<Mutex<Box<dyn IndustrialDevice + Send>>>>>> =
         Rc::new(RefCell::new(
             devices_box
@@ -62,9 +65,10 @@ async fn main() {
                 .map(|(name, val)| (name, Arc::new(Mutex::new(val))))
                 .collect(),
         ));
-
-    // Initialize the remotes
+    
+        // Initialize the remotes
     let remotes_box: HashMap<String, Box<dyn Remote + Send>> = app.remotes.try_into().unwrap();
+    
 
     let remotes: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn Remote + Send>>>>>> =
         Arc::new(Mutex::new(
@@ -76,17 +80,17 @@ async fn main() {
 
     // connect to all devices
     connect_devices(devices.clone()).await;
-
+    
     // Data fetch is triggered at the interval entered in configuration
     let mut interval = tokio::time::interval(Duration::from_secs(app.period));
-
+    
     let timeout = match app.timeout {
         Some(timeout) => Duration::from_secs(timeout),
         None => Duration::MAX,
     };
-
     let (data_received_tx, mut data_received_rx) =
         watch::channel(HashMap::<String, HashMap<String, RegisterValue>>::new());
+    
     // Start the task that send data to remotes
     {
         tokio::task::spawn(async move {
@@ -97,7 +101,7 @@ async fn main() {
             send_data_to_remotes(remotes, data_received_rx).await;
         });
     }
-
+    
     loop {
         // Wait for the configured time
         interval.tick().await;
@@ -107,7 +111,7 @@ async fn main() {
         rec_out.clear();
 
         rec_out = fetch_device(devices.clone(), timeout).await;
-
+        return;
         debug!("{rec_out:?}");
 
         // Send the new data

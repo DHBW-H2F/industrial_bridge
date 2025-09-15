@@ -3,7 +3,9 @@ use std::{convert::Infallible, error::Error};
 use custom_error::custom_error;
 use prometheus_push::error::PushMetricsError;
 
-custom_error! {pub RemoteInitError
+custom_error! {
+    /// List of error related to the config of the remote
+    pub RemoteInitError
     ParsingFailed{ err: Box<dyn Error>} = "There was an error parsing",
     InitialisationError{ err: Box<dyn Error> } = "The was an error on initilaisation",
     NotReachable{} = "This should not happen",

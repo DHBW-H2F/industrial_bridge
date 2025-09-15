@@ -14,6 +14,23 @@ use super::errors::RemoteInitError;
 
 #[async_trait]
 impl Remote for PrometheusMetricsPusher {
+    /// Sends a measurement to the remote prometheus instance.
+    ///
+    /// Builds an prometheus query using the current local timestamp and
+    /// appends all provided register values as fields of the measurement.
+    ///
+    /// Parameters
+    /// - `name`: the name of the measurement (prometheus series name).
+    /// - `values`: a map of field names to `RegisterValue`s that will be
+    ///   converted and stored as fields in the measurement.
+    ///
+    /// Returns
+    /// - `Ok(())` if the measurement was successfully pushed.
+    /// - `Err(RemoteError)` if the push failed or the server returned an error.
+    ///
+    /// Errors
+    /// - `RemoteError::PushFailedError` if prometheus responded with a non-empty error result.
+    /// - Propagates other errors returned from the underlying query execution.
     async fn send_measurement(
         &self,
         name: &str,

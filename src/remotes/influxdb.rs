@@ -9,6 +9,24 @@ use serde::Deserialize;
 
 #[async_trait]
 impl Remote for Client {
+    /// Sends a measurement to the remote InfluxDB instance.
+    ///
+    /// Builds an InfluxDB query using the current local timestamp and
+    /// appends all provided register values as fields of the measurement.
+    ///
+    /// Parameters
+    /// - `name`: the name of the measurement (InfluxDB series name).
+    /// - `values`: a map of field names to `RegisterValue`s that will be
+    ///   converted and stored as fields in the measurement.
+    ///
+    /// Returns
+    /// - `Ok(())` if the measurement was successfully pushed.
+    /// - `Err(RemoteError)` if the push failed or the server returned an error.
+    ///
+    /// Errors
+    /// - `RemoteError::PushFailedError` if InfluxDB responded with a non-empty error result.
+    /// - Propagates other errors returned from the underlying query execution.
+    /// 
     async fn send_measurement(
         &self,
         name: &str,
@@ -32,6 +50,13 @@ impl Remote for Client {
 }
 
 #[derive(Deserialize, Debug)]
+/// strucure that represent the config for the influx remote
+/// 
+/// # Fields
+/// 
+/// - `remote` (`String`) - the url address to access to the influxDB
+/// - `bucket` (`String`) - the named location where time series data is stored
+/// - `token` (`String`) - the identifies InfluxDB permissions
 pub struct InfluxDBRemote {
     pub remote: String,
     pub bucket: String,

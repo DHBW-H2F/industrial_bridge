@@ -1,18 +1,17 @@
 period: 15
 devices:
-  modbus:
-    TCP:
-      electrolyzer:
-        remote: "127.0.0.1:4502"
-        input_registers: "input_registers.json"
-        holding_registers: "holding_registers.json"
-    RTU:
-      electrolyzer-meter:
-        remote: "/dev/ttyACM0"
-        slave: 1
-        speed: 9600
-        input_registers: "meter_input.json"
-        holding_registers: "meter_holding.json"
+  modbus_tcp:
+    electrolyzer:
+      remote: "127.0.0.1:4502"
+      input_registers: "input_registers.json"
+      holding_registers: "holding_registers.json"
+  modbus_rtu:
+    electrolyzer-meter:
+      port: "/dev/ttyACM0"
+      slave: 1
+      speed: 9600
+      input_registers: "meter_input.json"
+      holding_registers: "meter_holding.json"
   S7:
     compressor:
       remote: 192.168.1.16:102

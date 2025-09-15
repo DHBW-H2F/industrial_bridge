@@ -12,8 +12,12 @@ pub mod modbus_rtu;
 pub mod modbus_tcp;
 pub mod s7;
 
-// Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
-// The connection for all devices is realized in parallel
+/// Connect all devices passed as arguments to their targets, panics on error (this should then only be used in the initialisation)
+/// The connection for all devices is realized in parallel
+/// 
+/// # Arguments
+/// 
+/// - `devices` (`Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>`) - All the devices
 pub async fn connect_devices<T: IndustrialDevice + Send + 'static + ?Sized>(
     devices: Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>,
 ) {
@@ -45,7 +49,16 @@ pub async fn connect_devices<T: IndustrialDevice + Send + 'static + ?Sized>(
     .await;
 }
 
-// Manage errors occuring on a modbus data read, try to reconnect if a BrokenPipe is detected
+/// Manage errors occuring on a modbus data read, try to reconnect if a BrokenPipe is detected
+/// # Arguments
+/// 
+/// - `err` (`IndustrialDeviceError`) - The error we whant to treat
+/// - `device` (`Arc<Mutex<Box<impl IndustrialDevice + ?Sized>>>`) - the device where there is the error
+/// 
+/// # Returns
+/// 
+/// - `Result<(), IndustrialDeviceError>` - Describe the return value.
+/// 
 async fn manage_errors(
     err: IndustrialDeviceError,
     device: Arc<Mutex<Box<impl IndustrialDevice + ?Sized>>>,
@@ -82,9 +95,18 @@ async fn manage_errors(
     };
 }
 
-// For all the devices passed, dump all registers and returns it as a HashMap<device_name, HashMap<register_name, register_value>>
-// Calls manage_error on error to try to reconnect
-// The data fetch if realized in parallel for each target
+/// For all the devices passed, dump all registers and returns it as a HashMap<device_name, HashMap<register_name, register_value>>
+/// Calls manage_error on error to try to reconnect
+/// The data fetch if realized in parallel for each target
+/// 
+/// # Arguments
+/// 
+/// - `devices` (`Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>`) - the list of device
+/// - `timeout_duration` (`Duration`) - the time where we concider that we can't access to the data
+/// 
+/// # Returns
+/// 
+/// - `HashMap<String, HashMap<String, RegisterValue>>` the liste of register and value
 pub async fn fetch_device<T: IndustrialDevice + Send + 'static + ?Sized>(
     devices: Rc<RefCell<HashMap<String, Arc<Mutex<Box<T>>>>>>,
     timeout_duration: Duration,

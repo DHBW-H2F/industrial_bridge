@@ -1,22 +1,26 @@
 # Industrial bridge
-Bridge between industrial devices (accessible using ModBus, S7, [...](#Protocols)) and a remote database (Prometheus, InfluxDB, [...](#Databases)).
+This github contains all the element to make the bridge between industrial devices (accessible using ModBus, S7, [...](#Protocols)) and a remote database (Prometheus, InfluxDB, [...](#Databases)).
 
-# Usage
-```
-Usage: industrial_bridge [OPTIONS]
+## Project contents
+- **src** : all the main rust file of the bridge 
+- **macros** : This file defines a procedural macro `#[derive(IntoHashMap)]`
+- **macros** : This file defines a procedural macro `#[derive(IntoHashMap)]`
+- *config.yalm* : contains all the configuration of the bridge application, device and remote ressources.
+- **docs** : contains all the doc to modify or use the project
 
-Options:
-  -c, --config-file <CONFIG_FILE>
-          Where to find the config file
-          
-          [default: config.yaml]
+## Protocols
+The currently supported device protocols are :
 
-  -h, --help
-          Print help (see a summary with '-h')
+- Modbus over TCP
+- Modbus over RTU
+- S7 (for db blocks)
 
-  -V, --version
-          Print version
-```
+## Databases
+The currently supported remote database are : 
+
+- InfluxDB
+- Prometheus (via PushGateway)
+
 
 ## Configurations
 The configuration is defined in a yaml file using the following format : 
@@ -56,15 +60,6 @@ For an example see [config.yaml](config.yaml)
 ## Registers definition
 The registers definition are loaded from json using the corresponding libraries ([modbus_device](https://github.com/lkzjdnb/modbus_device) and [s7_device](https://github.com/lkzjdnb/S7_devices)).
 
-# Protocols
-The currently supported device protocols are :
+## Use the project
 
-- Modbus over TCP
-- Modbus over RTU
-- S7 (for db blocks)
-
-# Databases
-The currently supported remote database are : 
-
-- InfluxDB
-- Prometheus (via PushGateway)
+See [USE.md](docs/USE.md)

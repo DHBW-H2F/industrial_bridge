@@ -16,6 +16,16 @@ pub mod errors;
 pub mod influxdb;
 pub mod prometheus;
 
+/// Awaits and processes the completion of all remote sending tasks.
+///
+/// This helper function consumes results from a [`JoinSet`] of tasks,
+/// where each task represents a push of measurement data to a remote
+/// backend.  
+/// 
+/// Errors are logged but do not interrupt the processing of other tasks.
+///
+/// # Parameters
+/// - `set`: The [`JoinSet`] containing remote sending tasks (`Result<(), RemoteError>`).
 async fn join_remotes_tasks(set: &mut JoinSet<Result<(), RemoteError>>) {
     while let Some(result) = set.join_next().await {
         match result {
@@ -30,6 +40,21 @@ async fn join_remotes_tasks(set: &mut JoinSet<Result<(), RemoteError>>) {
     }
 }
 
+/// Continuously listens for new measurement data and pushes it to all configured remotes.
+///
+/// This function spawns a dedicated async task for each remote backend (InfluxDB,
+/// Prometheus, etc.) whenever new data is available from the `watch::Receiver`.
+/// 
+/// It ensures that data is sent concurrently to all remotes, and handles cases where
+/// new data arrives before the previous push finishes.
+///
+/// # Parameters
+/// - `remotes`: A thread-safe shared map of remote backends (keyed by name),
+///   each implementing the [`Remote`] trait.
+/// - `data`: A [`watch::Receiver`] that broadcasts the latest measurement data,
+///   structured as:
+///   - Outer key = device/source name
+///   - Inner map = field name → `RegisterValue`
 pub async fn send_data_to_remotes(
     remotes: Arc<Mutex<HashMap<String, Arc<Mutex<Box<impl Remote + Send + 'static + ?Sized>>>>>>,
     mut data: watch::Receiver<HashMap<String, HashMap<String, RegisterValue>>>,
@@ -63,6 +88,24 @@ pub async fn send_data_to_remotes(
     }
 }
 
+
+/// Sends collected register data to a configured remote backend.
+///
+/// This function iterates over all measurement sources and their
+/// associated field values, and forwards them to the given `Remote`
+/// implementation (e.g. InfluxDB, Prometheus).
+///
+/// # Parameters
+/// - `name`: Logical name of the remote (used only for logging).
+/// - `remote`: A thread-safe, asynchronous reference to a type
+///   implementing the [`Remote`] trait.
+/// - `data`: A nested map of measurements, where:
+///   - Outer key = measurement source (e.g. device name).
+///   - Inner map = field name → `RegisterValue`.
+///
+/// # Returns
+/// - `Ok(())` if all measurements were successfully sent.
+/// - `Err(RemoteError)` if sending failed.
 pub async fn send_data_to_remote(
     name: &str,
     remote: Arc<Mutex<Box<impl Remote + ?Sized>>>,

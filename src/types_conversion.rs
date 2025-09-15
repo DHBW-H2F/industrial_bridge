@@ -14,7 +14,19 @@ impl From<Value> for RegisterValue {
     }
 }
 
-// Ugly conversion because of https://github.com/rust-lang/rust/issues/31844
+/// Ugly conversion because of https://github.com/rust-lang/rust/issues/31844
+/// Converts a `HashMap<K, V1>` into a `HashMap<K, V2>`
+/// by transforming each value using the `Into` trait.
+/// # Type Parameters
+/// - `K`: the key type, must implement `Hash + Eq + Clone`.
+/// - `V1`: the source value type, must implement `Clone` and `Into<V2>`.
+/// - `V2`: the target value type.
+///
+/// # Parameters
+/// - `val`: input `HashMap<K, V1>`
+///
+/// # Returns
+/// A new `HashMap<K, V2>` with identical keys and converted values.
 pub fn convert_hashmap<K: Hash + Eq + Clone, V1: Into<V2> + Clone, V2>(
     val: HashMap<K, V1>,
 ) -> HashMap<K, V2> {
